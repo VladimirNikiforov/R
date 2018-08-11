@@ -1,0 +1,150 @@
+---
+title: "Анализ влияния ожирения на вероятность развития диабета на примере статистики США"
+author: "Владимир Никифоров"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+params:
+  filename: RISKFACTORSANDACCESSTOCARE.csv
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(ggplot2) 
+library(plotly)
+library(ggmap)
+library(maps)
+library(knitr)
+options(scipen=0,digits=3)
+knitr::opts_chunk$set(echo = F, message=F, warning=F)
+```
+
+## Введение
+
+```{r}
+statsdata <- read.csv(params$filename)
+statsdata_corrected <- mutate_each(statsdata, funs(ifelse(.==-1111.1,NA,.)),which(sapply(statsdata, is.numeric)))
+statsdata_factors <- statsdata_corrected %>% 
+  select(CHSI_State_Name, CHSI_State_Abbr, Obesity, Diabetes, No_Exercise, High_Blood_Pres, Smoker, Few_Fruit_Veg) %>% 
+  mutate(CHSI_State_Name = tolower(CHSI_State_Name))
+
+risks <- statsdata_corrected[,c(4,7,10,13,16,19,22,25,26,27,28,29)]%>%
+  group_by(CHSI_State_Name)%>%
+  summarise_all(funs(median), na.rm=T)
+```
+
+Проблема диабета встает перед обществом все острее, хотя мы вокруг себя этого можем и не замечать.
+
+Множество исследований последних лет проводятся для идентификации причин диабета. 
+
+Одной из основных причин диабета такие исследования называют ожирение.[^1]
+
+[^1]: [Obesity and diabetes: the slow-motion disaster Keynote address at the 47th meeting of the National Academy of Medicine.Dr Margaret Chan Director-General of the World Health Organization. Washington, DC, USA. 17 October 2016](http://www.who.int/dg/speeches/2016/obesity-diabetes-disaster/en/)
+
+Благодаря открытым источникам министерства здравоохранения США (U.S. Department of Health & Human Services), мы можем взглянуть на ситуацию в США <https://catalog.data.gov>[^2] и проверить, зависит ли %диабета (Diabetes) от %ожирения (Obesity).
+
+[^2]: [Community Health Status Indicators (CHSI) to Combat Obesity, Heart Disease and Cancer.](ftp://ftp.cdc.gov/pub/Health_Statistics/NCHS/Datasets/CHDI/chsi_dataset.zip)
+
+Исходный файл содержит исследования по `r nlevels(as.factor(risks$CHSI_State_Name))` штату. 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+risks1 <- head(risks[order(risks$Diabetes, decreasing = T), c(1,7)],5)
+top5states <- select(mutate(risks1, State=toupper(CHSI_State_Name)),State,Diabetes)
+names(top5states) <- c("Пятерка штатов с максимальным средним % диабетиков", "% диабетиков")
+knitr::kable(top5states,caption="",digits = c(0,2))
+```
+
+На карте США распределение %диабета по штатам можно представить следущим образом:
+```{r analysis, message=FALSE, warning=FALSE}
+usa_states <- map_data("state")
+risks_region_low <- mutate(risks, CHSI_State_Name=tolower(CHSI_State_Name))
+risks_map <- merge(risks_region_low, usa_states, by.x = "CHSI_State_Name", by.y = "region")
+
+t <- ggplot() + geom_polygon(data = risks_map, aes(x = long, y = lat, group = group, fill = Diabetes, text=toupper(CHSI_State_Name)),colour="white") +
+  coord_map() +
+  scale_fill_distiller(palette = "Blues", values = c(1,0))+
+  guides(fill = guide_legend(reverse = TRUE)) +
+  theme_nothing(legend = TRUE) +
+  labs(title = "Зафиксированный % диабета в США", fill = "")
+ggplotly(t)
+```
+
+
+Для статистического анализа сгруппируем и усредним данные по штатам:
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+glimpse(risks)
+```
+
+## Гипотеза
+
+Предположим, что между показателями ожирения и диабета нет взаимосвязи.
+
+
+Алгоритм действий:
+
+1. Загружаем и подготавливаем файл.
+2. С помощью регрессионной модели определяем наиболее вероятные из имеющихся в файле факторы, приводящие к диабету.
+3. Проверяем гипотезу о зависимости ожирения и диабета.
+
+## Анализ
+
+Для определения наиболее вероятных факторов диабета найдем наилучшую регрессионную модель.
+
+Рассмотрим список значимых предикторов этой модели:
+
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+model_full <- lm(risks$Diabetes ~ ., data = risks[,-1])
+ideal_model <- step(model_full, direction = 'backward')
+sum_ideal_model <- summary(ideal_model)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+coeff <- sum_ideal_model$coefficients
+coeff
+```
+Отталкиваясь от нулевой гипотезы о независимости предсказываемой величины Diabetes от предикторов и равенстве коэффициентов регрессионной модели нулю, по p-уровню значимости мы можем сделать вывод, что коэффициенты в нашем выражении отличны от нуля. Т.е. предсказываемая величина значимо зависит от данных предикторов.
+
+Итак, в начале работы мы выдвигали гипотезу, что предсказываемая величина Diabetes не зависит от Obesity.
+Проверить ее мы можем с помощью линейной регрессии взаимосвязи Obesity с Diabetes:
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+fit <- lm(risks$Diabetes ~ risks$Obesity)
+sumfit <- summary(fit)
+sumfit
+#gvlma(fit)
+```
+
+Какие выводы мы можем сделать на основе данного результата?
+
+Величина p-значения=`r sumfit$coefficients[2,4]` показывает, что мы можем быть уверены на `r  format(100*(1-sumfit$coefficients[2,4]), nsmall = 10)`% в том, что предсказываемая величина Diabetes действительно зависит от предиктора Obesity.
+
+Представим эту зависимость в графическом виде:
+
+```{r ggplot_dyn_total_infr, fig.height=9, fig.width=9, message=FALSE, warning=FALSE}
+q <- ggplot(risks,aes(Obesity,Diabetes))+ 
+  geom_smooth(method="lm")+ 
+  geom_point()+ 
+  scale_x_continuous(name = "Obesity", breaks = c(0, seq(12, 30, 2)))
+  scale_y_continuous(name = "Diabetes", breaks = c(0, seq(4, 10, 1)))
+ggplotly(q)
+```
+
+## Выводы
+
+Проведенный анализ позволяет утверждать, что есть прямая зависимость между %ожирения и %диабета.
+
+В целях пропаганды здорового образа жизни вспомним основные профилактические меры по предупреждению диабета и его осложнений:
+
+  1. добиться здорового веса тела и поддерживать его;
+  2. быть физически активным — по меньшей мере, 30 минут регулярной активности умеренной интенсивности в течение большинства дней; для контролирования веса необходима дополнительная активность;
+  3. придерживаться здорового питания и уменьшать потребление сахара и насыщенных жиров;
+  4. воздерживаться от употребления табака — курение повышает риск развития сердечно-сосудистых заболеваний.[^3]
+
+
+**-Давайте, чтобы все были здоровы!**
+
+**-Прекрасный тост!**[^4]
+
+[^3]: [Всемирная организация здравоохранения](http://www.who.int/mediacentre/factsheets/fs312/ru/)
+[^4]: [Э.А.Рязанов. К/ф "Служебный роман"]
