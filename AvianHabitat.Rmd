@@ -1,0 +1,128 @@
+---
+title: "Анализ зависимости флоры и фауны Аляски на основе данных avianHabitat"
+author: "Владимир Никифоров [https://stepik.org/users/15006560]"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+params:
+  habitat_csv: avianHabitat_sewardPeninsula_McNew_2012.csv
+  points_csv: avianPointTransectSurvey_sewardPeninsula_McNew_2012.csv
+
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+#Подключаем все пакеты
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2) 
+library(plotly)
+library(knitr)
+options(scipen=0,digits=3)
+knitr::opts_chunk$set(echo = F, message=F, warning=F)
+```
+
+## Введение
+
+```{r prepare}
+# Подготовка данных - агрегация и соединение в общий dataframe
+av_points <- read.csv(params$habitat_csv)
+av_birds <- read.csv(params$points_csv)
+
+av_points$Site <- factor(str_replace(av_points$Site, "[:digit:]+", ""))
+av_birds$Site <- factor(str_replace(av_birds$Site, "[:digit:]+", ""))
+
+df_points <- av_points %>% 
+  group_by(Site) %>% 
+  select(Site, contains("Ht")) %>% 
+  gather(Vid, height, -Site) %>% 
+  select(Site, height) %>% 
+  filter(height > 0) %>% 
+  group_by(Site) %>% 
+  summarise(h = max(height))
+df_birds <- av_birds %>% 
+  group_by(Site,Common_name) %>% 
+  select(Site, Common_name, V1, V2, V3) %>% 
+  gather(Var, Val, -Site, -Common_name) %>% 
+  select(Site, Common_name, Val) %>% 
+  summarise(meanOb = mean(Val,na.rm = T), sumOb = sum(Val,na.rm = T))
+df <- merge(df_points, df_birds)
+```
+
+После многочисленных исследований и оценки стоимости разработки Royal Dutch Shell Plc остановила работы по разведке нефтегазовых месторождений на шельфе у берегов Аляски.[^1]
+
+[^1]: [SHELL UPDATES ON ALASKA EXPLORATION. 28 September 2015](http://www.shell.com/media/news-and-media-releases/2015/shell-updates-on-alaska-exploration.html)
+
+В том числе, благодаря действиям таких компаний как GreenPeace[^2], Аляска вздохнула свободнее.
+
+[^2]: [Аляска в опасности!](http://www.greenpeace.org/russia/ru/campaigns/protect-the-arctic/Alaska-in-danger/)
+
+Так кто же они - жители Аляски? 
+Сегодня мы рассмотрим их пернатую часть.
+А помогут нам в этом исследования среды обитания птиц крупного полуострова Сьюард, что в западной Аляске, США:
+<https://alaska.usgs.gov/data/landBirds/sewardPeninsula/2012>[^3][^4]
+
+[^3]: [Avian Habitat Data; Seward Peninsula, Alaska, 2012](https://alaska.usgs.gov/data/landBirds/sewardPeninsula/2012/avianHabitat_sewardPeninsula_McNew_2012.zip)
+[^4]: [Avian Point Transect Survey; Seward Peninsula, Alaska, 2012](https://alaska.usgs.gov/data/landBirds/sewardPeninsula/2012/avianPointTransectSurvey_sewardPeninsula_McNew_2012.zip)
+
+
+## Анализ данных
+
+Исходные файлы содержат исследования `r nlevels(as.factor(df_points$Site))` точек наблюдения на местности, где встречались `r nlevels(as.factor(df_birds$Common_name))` видов птиц в зависимости от произрастающих на этой местности `r ncol(select(av_points, contains("Ht")))` видов растений. 
+
+
+```{r top5, echo=FALSE, message=FALSE, warning=FALSE}
+#Получим ТОП5 видов птиц по количество встреченных исследователями особей
+df_birds_top <- df_birds %>% group_by(Common_name) %>% summarise(meanOb=mean(meanOb),sumOb=sum(sumOb))
+top5birds <- data.frame(head(df_birds_top[order(df_birds_top$meanOb,decreasing = T), ],5))
+top5birds$url <- paste0("[",top5birds$Common_name,"](https://www.google.ru/search?q=",str_replace(top5birds$Common_name," ","+"),")")
+top5birds_tbl <- top5birds[,c(4,3)]
+names(top5birds_tbl) <- c("Bird species","Observated count")
+knitr::kable(top5birds_tbl,caption="Top5 bird species")
+```
+
+Выявить возможные закономерности в распределении количества особей птиц в зависимости от высоты растительности можно графически:
+```{r analysis, message=FALSE, warning=FALSE}
+# Строим графики для визуального анализа данных
+df <- filter(df,Common_name %in% top5birds[[1]])
+
+t <- ggplot(df, aes(x=h, y=meanOb, group=Common_name)) + 
+  geom_line(aes(color = Common_name))+ 
+  theme(legend.position="top")+ 
+  facet_wrap(~Common_name, nrow = 5)+
+  scale_x_continuous(name = "Max height") +
+  scale_y_continuous(name = "Mean count of birds") +
+  scale_color_discrete(name="Birds species")
+ggplotly(t)
+```
+
+Наиболее выраженные закономерности подтверждаются общедоступными данными о среде обитания:
+
+```{r table, echo=FALSE, message=FALSE, results='asis', warnings=FALSE}
+#Справочная таблица из вики
+tab <- "
+|               |               |
+|---------------|:-------------:|
+| ![Пестрогрудая овсянка](https://upload.wikimedia.org/wikipedia/commons/thumb/1/13/Passerella_iliaca-001.jpg/300px-Passerella_iliaca-001.jpg)      | **Пестрогрудая овсянка** (она же **Fox Sparrow**) предпочитает кустарники, низкие деревья.[^5] |
+| ![Тундряная чечётка](https://upload.wikimedia.org/wikipedia/commons/thumb/e/ee/Carduelis_hornemanni_CT3.jpg/230px-Carduelis_hornemanni_CT3.jpg)      | **Тундряная чечётка** (она же **Hoary Redpoll**) также предпочитает кустарники, низкие деревья.[^6] |
+| ![Лапландский подорожник](https://upload.wikimedia.org/wikipedia/commons/thumb/8/89/Lapland_Longspur_%28Calcarius_lapponicus%29.jpg/1280px-Lapland_Longspur_%28Calcarius_lapponicus%29.jpg)      | **Лапландский подорожник** (он же **Lapland Longspur**) наоборот любит пространства, где уже отсутствуют деревья, поросшие карликовыми кустарниками.[^7] |
+"
+cat(tab)
+```
+[^5]: [Пестрогрудая овсянка](https://ru.wikipedia.org/wiki/%D0%9F%D0%B5%D1%81%D1%82%D1%80%D0%BE%D0%B3%D1%80%D1%83%D0%B4%D0%B0%D1%8F_%D0%BE%D0%B2%D1%81%D1%8F%D0%BD%D0%BA%D0%B0)
+[^6]: [Тундряная чечётка](https://ru.wikipedia.org/wiki/%D0%A2%D1%83%D0%BD%D0%B4%D1%80%D1%8F%D0%BD%D0%B0%D1%8F_%D1%87%D0%B5%D1%87%D1%91%D1%82%D0%BA%D0%B0)
+[^7]: [Лапландский подорожник](https://ru.wikipedia.org/wiki/%D0%9B%D0%B0%D0%BF%D0%BB%D0%B0%D0%BD%D0%B4%D1%81%D0%BA%D0%B8%D0%B9_%D0%BF%D0%BE%D0%B4%D0%BE%D1%80%D0%BE%D0%B6%D0%BD%D0%B8%D0%BA)
+
+
+
+## Выводы
+
+Предоставленные данные позволяют получить лишь довольно грубую оценку закономерности зависимости преобладающих видов птиц от характера растительности на территории.
+
+Мы провели графический анализ зависимостей и сопоставили с известными данными о среде обитания выбранных видов птиц, убедившись в схожести результатов рассуждений с другими исследованиями.
+
+Следует помнить, что попытки делать выводы на основе немногочисленных исследований зачастую приводит к неправильным результатам.
+
+Необходимо значительно больше исследований для выявления достаточно выраженных закономерностей.
